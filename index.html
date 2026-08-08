@@ -169,10 +169,55 @@
       }
     }
 
-    function searchPart() {
-      const query = document.getElementById('part-input').value.trim();
-      if (query) selectItem(query);
-    }
+   function searchPart() {
+  const query = document.getElementById('part-input').value.trim().toLowerCase();
+  
+  if (!query) {
+    alert("Please enter a keyword to search.");
+    return;
+  }
+
+  // Filter items containing the keyword in part number or name
+  const matches = inventory.filter(i => 
+    String(i.partNo).toLowerCase().includes(query) || 
+    String(i.name).toLowerCase().includes(query)
+  );
+
+  if (matches.length === 0) {
+    alert("No items found matching keyword: " + query);
+    document.getElementById('item-card').classList.add('hidden');
+  } else if (matches.length === 1) {
+    // Exact or single keyword match -> select directly
+    selectItem(matches[0].partNo);
+  } else {
+    // Multiple matches -> highlight filtered items in table and pick the first one
+    selectItem(matches[0].partNo);
+    alert(`Found ${matches.length} matching items. Displaying top match: ${matches[0].name}`);
+  }
+}
+
+// Select item function supporting direct selection or exact match
+function selectItem(identifier) {
+  const query = String(identifier).toLowerCase();
+
+  // Look for exact match first, then partial match
+  selectedItem = inventory.find(i => String(i.partNo).toLowerCase() === query) ||
+                 inventory.find(i => String(i.name).toLowerCase() === query) ||
+                 inventory.find(i => String(i.partNo).toLowerCase().includes(query) || 
+                                     String(i.name).toLowerCase().includes(query));
+  
+  const card = document.getElementById('item-card');
+  if (selectedItem) {
+    document.getElementById('card-title').innerText = selectedItem.name;
+    document.getElementById('card-partno').innerText = selectedItem.partNo;
+    document.getElementById('card-location').innerText = selectedItem.location;
+    document.getElementById('card-qty').innerText = selectedItem.qty;
+    card.classList.remove('hidden');
+  } else {
+    alert("Item not found!");
+    card.classList.add('hidden');
+  }
+}
 
     // Sync quantity updates directly back to Google Sheet
     async function updateStock(type) {
