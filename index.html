@@ -46,13 +46,13 @@
       </button>
     </div>
 
-    <!-- Search Part -->
+    <!-- Keyword Search Input -->
     <div class="bg-white rounded-xl shadow p-4 space-y-3">
-      <h2 class="text-lg font-semibold">Search Part</h2>
-      <div class="flex gap-2">
-        <input id="part-input" type="text" placeholder="Part # or Name" class="flex-1 border rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none">
-        <button onclick="searchPart()" class="bg-slate-800 text-white px-4 py-2 rounded-lg font-medium">Find</button>
-      </div>
+      <h2 class="text-lg font-semibold">Search Part (Keyword)</h2>
+      <form onsubmit="event.preventDefault(); searchPart();" class="flex gap-2">
+        <input id="part-input" type="text" placeholder="Enter keyword (e.g. oil, sedan, 101)" class="flex-1 border rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none">
+        <button type="submit" class="bg-slate-800 text-white px-4 py-2 rounded-lg font-medium">Find</button>
+      </form>
     </div>
 
     <!-- Item Details & Transaction Form -->
@@ -62,7 +62,9 @@
           <h3 id="card-title" class="text-lg font-bold text-slate-900"></h3>
           <span id="card-partno" class="bg-slate-100 text-slate-600 text-xs px-2 py-1 rounded font-mono"></span>
         </div>
-        <p class="text-sm text-slate-500 mt-1">Location: <span id="card-location" class="font-semibold text-slate-700"></span></p>
+        <!-- Description -->
+        <p id="card-desc" class="text-sm text-slate-600 mt-1 italic"></p>
+        <p class="text-sm text-slate-500 mt-2">Location: <span id="card-location" class="font-semibold text-slate-700"></span></p>
         <p class="text-2xl font-black text-indigo-600 mt-2">Qty: <span id="card-qty"></span></p>
       </div>
 
@@ -83,14 +85,14 @@
       </div>
     </div>
 
-    <!-- Inventory Table -->
+    <!-- Inventory Table with Description -->
     <div class="bg-white rounded-xl shadow p-4">
       <h2 class="text-lg font-semibold mb-3">All Items</h2>
       <div class="overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead class="bg-slate-50 text-slate-500 uppercase text-xs">
             <tr>
-              <th class="p-2">Part</th>
+              <th class="p-2">Item & Description</th>
               <th class="p-2">Qty</th>
               <th class="p-2">Loc</th>
             </tr>
@@ -104,14 +106,45 @@
 
   <script>
     // PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE:
-    const API_URL = "https://script.google.com/macros/s/AKfycbyZNxR8pjklSjx0Pa97er1H3Zi6TW5zwUbod0HTsDCeDjda4f1fHdyNpIt5HYaKoFY/exec";
+    const API_URL = "https://script.google.com/macros/s/AKfycbzfaHw7qXBnNSEaeLbyaRHckbVG1htehq4VdahfGaTnZTYIpyGcAGmenjGDBWU9_cg/exec";
 
     let inventory = [];
     let selectedItem = null;
     let html5QrcodeScanner = null;
     let isScanning = false;
 
-    // Fetch live data from Google Sheet
+    // Register Service Worker for Offline Capabilities
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+          .then(reg => console.log('Service Worker registered.'))
+          .catch(err => console.log('Service Worker registration failed:', err));
+      });
+    }
+
+    // PWA Install Prompt Handler
+    let deferredPrompt;
+    const installBtn = document.getElementById('pwa-install-btn');
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn.classList.remove('hidden');
+    });
+
+    installBtn.addEventListener('click', () => {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choiceResult) => {
+          if (choiceResult.outcome === 'accepted') {
+            installBtn.classList.add('hidden');
+          }
+          deferredPrompt = null;
+        });
+      }
+    });
+
+    // Fetch live inventory data from Google Sheets
     async function fetchInventoryFromSheet() {
       const statusEl = document.getElementById('sync-status');
       statusEl.innerText = "Syncing with Google Sheet...";
@@ -132,6 +165,7 @@
       }
     }
 
+    // Render Table with Item Name, Part No, and Description
     function renderInventoryTable() {
       const tbody = document.getElementById('inventory-list');
       if (inventory.length === 0) {
@@ -141,8 +175,9 @@
       tbody.innerHTML = inventory.map(item => `
         <tr class="hover:bg-slate-50 cursor-pointer" onclick="selectItem('${item.partNo}')">
           <td class="p-2">
-            <div class="font-medium">${item.name}</div>
-            <div class="text-xs text-slate-400 font-mono">${item.partNo}</div>
+            <div class="font-medium text-slate-900">${item.name}</div>
+            <div class="text-xs text-indigo-600 font-mono font-semibold">${item.partNo}</div>
+            ${item.description ? `<div class="text-xs text-slate-500 mt-0.5 line-clamp-1">${item.description}</div>` : ''}
           </td>
           <td class="p-2 font-bold ${item.qty < 10 ? 'text-rose-600' : 'text-slate-700'}">${item.qty}</td>
           <td class="p-2 text-xs text-slate-500">${item.location}</td>
@@ -150,90 +185,77 @@
       `).join('');
     }
 
-    function selectItem(partNo) {
-      selectedItem = inventory.find(i => 
-        String(i.partNo).toLowerCase() === String(partNo).toLowerCase() || 
-        String(i.name).toLowerCase() === String(partNo).toLowerCase()
-      );
+    // Search using partial keyword matching (searches partNo, name, AND description)
+    function searchPart() {
+      const query = document.getElementById('part-input').value.trim().toLowerCase();
       
-      const card = document.getElementById('item-card');
-      if (selectedItem) {
-        document.getElementById('card-title').innerText = selectedItem.name;
-        document.getElementById('card-partno').innerText = selectedItem.partNo;
-        document.getElementById('card-location').innerText = selectedItem.location;
-        document.getElementById('card-qty').innerText = selectedItem.qty;
-        card.classList.remove('hidden');
+      if (!query) {
+        alert("Please enter a keyword to search.");
+        return;
+      }
+
+      const matches = inventory.filter(item => 
+        String(item.partNo).toLowerCase().includes(query) || 
+        String(item.name).toLowerCase().includes(query) ||
+        String(item.description || '').toLowerCase().includes(query)
+      );
+
+      if (matches.length === 0) {
+        alert(`No items found matching keyword: "${query}"`);
+        document.getElementById('item-card').classList.add('hidden');
+      } else if (matches.length === 1) {
+        displayItemCard(matches[0]);
       } else {
-        alert("Item not found in Google Sheet!");
-        card.classList.add('hidden');
+        displayItemCard(matches[0]);
+        alert(`Found ${matches.length} items matching "${query}". Displaying first match: ${matches[0].name}`);
       }
     }
 
-   function searchPart() {
-  const query = document.getElementById('part-input').value.trim().toLowerCase();
-  
-  if (!query) {
-    alert("Please enter a keyword to search.");
-    return;
-  }
+    // Render selected item inside details card
+    function displayItemCard(item) {
+      selectedItem = item;
+      const card = document.getElementById('item-card');
+      
+      document.getElementById('card-title').innerText = selectedItem.name;
+      document.getElementById('card-partno').innerText = selectedItem.partNo;
+      document.getElementById('card-desc').innerText = selectedItem.description || 'No description available.';
+      document.getElementById('card-location').innerText = selectedItem.location;
+      document.getElementById('card-qty').innerText = selectedItem.qty;
+      
+      card.classList.remove('hidden');
+    }
 
-  // Filter items containing the keyword in part number or name
-  const matches = inventory.filter(i => 
-    String(i.partNo).toLowerCase().includes(query) || 
-    String(i.name).toLowerCase().includes(query)
-  );
+    // Helper for table selection and QR code detection
+    function selectItem(identifier) {
+      const query = String(identifier).trim().toLowerCase();
 
-  if (matches.length === 0) {
-    alert("No items found matching keyword: " + query);
-    document.getElementById('item-card').classList.add('hidden');
-  } else if (matches.length === 1) {
-    // Exact or single keyword match -> select directly
-    selectItem(matches[0].partNo);
-  } else {
-    // Multiple matches -> highlight filtered items in table and pick the first one
-    selectItem(matches[0].partNo);
-    alert(`Found ${matches.length} matching items. Displaying top match: ${matches[0].name}`);
-  }
-}
+      const item = inventory.find(i => String(i.partNo).toLowerCase() === query) ||
+                   inventory.find(i => String(i.name).toLowerCase() === query) ||
+                   inventory.find(i => String(i.partNo).toLowerCase().includes(query) || 
+                                       String(i.name).toLowerCase().includes(query) ||
+                                       String(i.description || '').toLowerCase().includes(query));
 
-// Select item function supporting direct selection or exact match
-function selectItem(identifier) {
-  const query = String(identifier).toLowerCase();
+      if (item) {
+        displayItemCard(item);
+      } else {
+        alert(`Item "${identifier}" not found in inventory.`);
+        document.getElementById('item-card').classList.add('hidden');
+      }
+    }
 
-  // Look for exact match first, then partial match
-  selectedItem = inventory.find(i => String(i.partNo).toLowerCase() === query) ||
-                 inventory.find(i => String(i.name).toLowerCase() === query) ||
-                 inventory.find(i => String(i.partNo).toLowerCase().includes(query) || 
-                                     String(i.name).toLowerCase().includes(query));
-  
-  const card = document.getElementById('item-card');
-  if (selectedItem) {
-    document.getElementById('card-title').innerText = selectedItem.name;
-    document.getElementById('card-partno').innerText = selectedItem.partNo;
-    document.getElementById('card-location').innerText = selectedItem.location;
-    document.getElementById('card-qty').innerText = selectedItem.qty;
-    card.classList.remove('hidden');
-  } else {
-    alert("Item not found!");
-    card.classList.add('hidden');
-  }
-}
-
-    // Sync quantity updates directly back to Google Sheet
+    // Update stock quantity and submit transaction log
     async function updateStock(type) {
       if (!selectedItem) return;
       const amount = parseInt(document.getElementById('txn-qty').value) || 0;
       if (amount <= 0) return alert("Enter a valid quantity.");
 
-      let newQty = selectedItem.qty;
-      if (type === 'sell') {
-        if (amount > selectedItem.qty) return alert("Insufficient stock!");
-        newQty -= amount;
-      } else {
-        newQty += amount;
+      let changeQty = (type === 'sell') ? -amount : amount;
+      let newQty = selectedItem.qty + changeQty;
+
+      if (type === 'sell' && amount > selectedItem.qty) {
+        return alert("Insufficient stock!");
       }
 
-      // UI update optimization
       const btnReceive = document.getElementById('btn-receive');
       const btnSell = document.getElementById('btn-sell');
       btnReceive.disabled = true;
@@ -243,19 +265,20 @@ function selectItem(identifier) {
       try {
         await fetch(API_URL, {
           method: 'POST',
-          mode: 'no-cors', // Bypasses Google Apps Script CORS restrictions
+          mode: 'no-cors',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             partNo: selectedItem.partNo,
-            qty: newQty
+            changeQty: changeQty,
+            action: (type === 'sell') ? "SELL" : "RECEIVE"
           })
         });
 
-        // Update local object & refresh UI
+        // Update local state & refresh interface
         selectedItem.qty = newQty;
         document.getElementById('card-qty').innerText = newQty;
         renderInventoryTable();
-        document.getElementById('sync-status').innerText = "● Updated in Sheet";
+        document.getElementById('sync-status').innerText = "● Updated & Logged";
       } catch (err) {
         alert("Failed to update Google Sheet: " + err);
       } finally {
@@ -264,8 +287,10 @@ function selectItem(identifier) {
       }
     }
 
+    // Camera QR Code Scanner Toggle
     function toggleScanner() {
       const btn = document.getElementById('scan-btn');
+      
       if (isScanning) {
         html5QrcodeScanner.stop().then(() => {
           isScanning = false;
@@ -282,7 +307,7 @@ function selectItem(identifier) {
             toggleScanner();
           },
           () => {}
-        ).catch(err => alert("Camera error: " + err));
+        ).catch(err => alert("Camera permission error: " + err));
 
         isScanning = true;
         btn.innerText = "Stop Camera";
@@ -290,7 +315,7 @@ function selectItem(identifier) {
       }
     }
 
-    // Initial load on launch
+    // Initial load on page load
     fetchInventoryFromSheet();
   </script>
 </body>
